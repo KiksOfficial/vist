@@ -1,11 +1,12 @@
 use crossterm::{
-    ExecutableCommand,
+    ExecutableCommand, cursor,
     event::{self, Event, KeyCode, KeyEventKind},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{prelude::*, widgets::Paragraph};
-use std::fs::OpenOptions;
+use ratatui::prelude::*;
+use ratatui::widgets::{self, Paragraph};
 use std::io::{self, Write, stdout};
+use std::{env, fs::OpenOptions};
 
 enum VimMode {
     Insert,
@@ -22,8 +23,20 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
     let mut command_buffer = String::with_capacity(3);
-    let mut big_buffer: Vec<String> = Vec::new();
-    let mut line = String::with_capacity(4096);
+    let mut big_buffer = String::with_capacity(4096);
+    //let mut line = String::with_capacity(4096);
+    let mut command_mode = false;
+
+    let argumenid: Vec<String> = env::args().collect();
+    if argumenid.len() < 2 {
+        disable_raw_mode()?;
+        stdout().execute(LeaveAlternateScreen)?;
+        return Ok(());
+    }
+    let filename = &argumenid[1];
+
+    let mut cursor_x: u16 = 0;
+    let mut cursor_y: u16 = 0;
 
     // Main loop
     loop {
@@ -33,31 +46,80 @@ fn main() -> io::Result<()> {
 
             let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
 
-            let command_bar = Paragraph::new(command_buffer.clone());
-            let text_lines: Vec<Line> = big_buffer.iter().map(|s| Line::from(s.clone())).collect();
-            let file_buffer = Paragraph::new(text_lines);
-            frame.render_widget(file_buffer, chunks[0]);
+            let block_file = widgets::Block::default().borders(widgets::Borders::ALL);
+            let inner_file_area = block_file.inner(chunks[0]);
+
+            let command_bar = Paragraph::new(&*command_buffer);
+            let file_display = Paragraph::new(&*big_buffer);
+
+            frame.render_widget(block_file, chunks[0]);
+            frame.render_widget(file_display, inner_file_area);
             frame.render_widget(command_bar, chunks[1]);
+
+            if command_mode {
+                frame.set_cursor_position(Position {
+                    x: chunks[1].x + command_buffer.len() as u16,
+                    y: chunks[1].y,
+                });
+            } else {
+                frame.set_cursor_position(Position {
+                    x: inner_file_area.x + cursor_x,
+                    y: inner_file_area.y + cursor_y,
+                });
+            }
         })?;
 
         if let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
+            if command_mode {
+                match key.code {
+                    KeyCode::Char(c) => {
+                        command_buffer.push(c);
+                        cursor_x += 1;
+                    }
+                    KeyCode::Backspace => {
+                        command_buffer.pop();
+                    }
+                    KeyCode::Enter => {
+                        if let Ok(return_) =
+                            handle_command_buffer(&command_buffer, &big_buffer, filename)
+                            && return_ == 1
+                        {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
             match key.code {
+                KeyCode::Char(':') => {
+                    command_mode = true;
+                    command_buffer.push(':');
+                }
                 KeyCode::Char(c) => {
-                    command_buffer.push(c);
+                    big_buffer.push(c);
+                    cursor_x += 1;
                 }
                 KeyCode::Backspace => {
-                    command_buffer.pop();
+                    if big_buffer.pop().is_some() {
+                        if cursor_x > 0 {
+                            cursor_x -= 1;
+                        } else if cursor_y > 0 {
+                            cursor_y -= 1;
+                            cursor_x = 0;
+                        }
+                    }
+                }
+                KeyCode::Esc => {
+                    command_mode = false;
+                    command_buffer.clear();
                 }
 
                 KeyCode::Enter => {
-                    if command_buffer == ":q" {
-                        break;
-                    } else {
-                        big_buffer.push(line.clone());
-                        line = "".to_string();
-                    }
+                    big_buffer.push('\n');
+                    cursor_y += 1;
+                    cursor_x = 0;
                 }
                 _ => {}
             }
@@ -70,42 +132,25 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn test() {
-    println!("Vist: a Vim-like text editor written in rust");
-    println!("Currently just takes user input and stuff");
-
-    let mut big_buffer: Vec<String> = Vec::new();
-
-    loop {
-        print!("Enter sth: ");
-        io::stdout().flush().unwrap();
-
-        let mut line = String::with_capacity(4096);
-        let stdin_ = io::stdin();
-
-        match stdin_.read_line(&mut line) {
-            Ok(_) => {
-                if handle_exit(line.trim()) {
-                    break;
-                } else if line.trim() == ":w" {
-                    let _ = save_to_disk(&big_buffer);
-                } else {
-                    big_buffer.push(line.trim_end().to_string());
-                }
+fn handle_command_buffer(sisend: &str, faili_sisu: &str, filename: &str) -> io::Result<u8> {
+    for char_ in sisend.chars() {
+        match char_ {
+            'w' => {
+                save_to_disk(faili_sisu, filename)?;
             }
-            Err(e) => eprintln!("Error: {}", e),
+            'q' => return Ok(1),
+            _ => {}
         }
     }
+    Ok(0)
 }
 
-fn handle_exit(sisend: &str) -> bool {
-    sisend == ":q"
-}
-
-fn save_to_disk(document: &[String]) -> io::Result<usize> {
-    let document = document.join("\n");
-    let mut buffer = OpenOptions::new().create(true).append(true).open("test")?;
-    let bytes = document.as_bytes();
+fn save_to_disk(faili_sisu: &str, filename: &str) -> io::Result<usize> {
+    let mut buffer = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(filename)?;
+    let bytes = faili_sisu.as_bytes();
 
     let mut pos = 0;
 
