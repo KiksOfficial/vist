@@ -5,8 +5,11 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use ratatui::widgets::{self, Paragraph};
-use std::io::{self, Write, stdout};
 use std::{env, fs::OpenOptions};
+use std::{
+    fs,
+    io::{self, Write, stdout},
+};
 
 enum VimMode {
     Insert,
@@ -24,8 +27,10 @@ fn main() -> io::Result<()> {
 
     let mut command_buffer = String::with_capacity(3);
     let mut big_buffer = String::with_capacity(4096);
-    //let mut line = String::with_capacity(4096);
     let mut command_mode = false;
+
+    let mut line_lens: Vec<usize> = vec![0];
+    let mut current_line: usize = 0;
 
     let argumenid: Vec<String> = env::args().collect();
     if argumenid.len() < 2 {
@@ -33,10 +38,29 @@ fn main() -> io::Result<()> {
         stdout().execute(LeaveAlternateScreen)?;
         return Ok(());
     }
-    let filename = &argumenid[1];
 
     let mut cursor_x: u16 = 0;
     let mut cursor_y: u16 = 0;
+
+    let filename = &argumenid[1];
+    if fs::exists(filename)? {
+        big_buffer = fs::read_to_string(filename)?;
+        line_lens.clear();
+
+        let mut len_in_line: usize = 0;
+        for ch in big_buffer.chars() {
+            if ch == '\n' {
+                line_lens.push(len_in_line);
+                len_in_line = 0;
+                current_line += 1;
+            } else {
+                len_in_line += 1;
+            }
+        }
+        line_lens.push(len_in_line);
+        cursor_x = len_in_line as u16;
+        cursor_y = current_line as u16;
+    }
 
     // Main loop
     loop {
@@ -91,37 +115,43 @@ fn main() -> io::Result<()> {
                     }
                     _ => {}
                 }
-            }
-            match key.code {
-                KeyCode::Char(':') => {
-                    command_mode = true;
-                    command_buffer.push(':');
-                }
-                KeyCode::Char(c) => {
-                    big_buffer.push(c);
-                    cursor_x += 1;
-                }
-                KeyCode::Backspace => {
-                    if big_buffer.pop().is_some() {
-                        if cursor_x > 0 {
-                            cursor_x -= 1;
-                        } else if cursor_y > 0 {
-                            cursor_y -= 1;
-                            cursor_x = 0;
+            } else {
+                match key.code {
+                    KeyCode::Char(':') => {
+                        command_mode = true;
+                        command_buffer.push(':');
+                    }
+                    KeyCode::Char(c) => {
+                        big_buffer.push(c);
+                        cursor_x += 1;
+                        line_lens[current_line] += 1;
+                    }
+                    KeyCode::Backspace => {
+                        if big_buffer.pop().is_some() {
+                            if cursor_x > 0 {
+                                cursor_x -= 1;
+                                line_lens[current_line] -= 1;
+                            } else if cursor_y > 0 {
+                                cursor_y -= 1;
+                                current_line -= 1;
+                                cursor_x = line_lens[current_line] as u16;
+                            }
                         }
                     }
-                }
-                KeyCode::Esc => {
-                    command_mode = false;
-                    command_buffer.clear();
-                }
+                    KeyCode::Esc => {
+                        command_mode = false;
+                        command_buffer.clear();
+                    }
 
-                KeyCode::Enter => {
-                    big_buffer.push('\n');
-                    cursor_y += 1;
-                    cursor_x = 0;
+                    KeyCode::Enter => {
+                        big_buffer.push('\n');
+                        cursor_y += 1;
+                        cursor_x = 0;
+                        current_line += 1;
+                        line_lens.push(0);
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
@@ -147,8 +177,9 @@ fn handle_command_buffer(sisend: &str, faili_sisu: &str, filename: &str) -> io::
 
 fn save_to_disk(faili_sisu: &str, filename: &str) -> io::Result<usize> {
     let mut buffer = OpenOptions::new()
+        .write(true)
+        .truncate(true)
         .create(true)
-        .append(true)
         .open(filename)?;
     let bytes = faili_sisu.as_bytes();
 
